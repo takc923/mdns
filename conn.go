@@ -3,6 +3,7 @@ package mdns
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"sync"
@@ -36,6 +37,7 @@ type query struct {
 type queryResult struct {
 	answer dnsmessage.ResourceHeader
 	addr   net.Addr
+	name   string
 }
 
 const (
@@ -149,6 +151,38 @@ func (c *Conn) Query(ctx context.Context, name string) (dnsmessage.ResourceHeade
 	}
 }
 
+func (c *Conn) IQuery(ctx context.Context, ip [4]byte) (dnsmessage.ResourceHeader, string, error) {
+	select {
+	case <-c.closed:
+		return dnsmessage.ResourceHeader{}, "", errConnectionClosed
+	default:
+	}
+
+	nameWithSuffix := fmt.Sprintf("%v.%v.%v.%v.in-addr.arpa.", ip[3], ip[2], ip[1], ip[0])
+
+	queryChan := make(chan queryResult, 1)
+	c.mu.Lock()
+	c.queries = append(c.queries, query{nameWithSuffix, queryChan})
+	ticker := time.NewTicker(c.queryInterval)
+	c.mu.Unlock()
+
+	defer ticker.Stop()
+
+	c.sendInverseQuestion(nameWithSuffix)
+	for {
+		select {
+		case <-ticker.C:
+			c.sendInverseQuestion(nameWithSuffix)
+		case <-c.closed:
+			return dnsmessage.ResourceHeader{}, "", errConnectionClosed
+		case res := <-queryChan:
+			return res.answer, res.name, nil
+		case <-ctx.Done():
+			return dnsmessage.ResourceHeader{}, "", errContextElapsed
+		}
+	}
+}
+
 func ipToBytes(ip net.IP) (out [4]byte) {
 	rawIP := ip.To4()
 	if rawIP == nil {
@@ -187,6 +221,36 @@ func (c *Conn) sendQuestion(name string) {
 		Questions: []dnsmessage.Question{
 			{
 				Type:  dnsmessage.TypeA,
+				Class: dnsmessage.ClassINET,
+				Name:  packedName,
+			},
+		},
+	}
+
+	rawQuery, err := msg.Pack()
+	if err != nil {
+		c.log.Warnf("Failed to construct mDNS packet %v", err)
+		return
+	}
+
+	if _, err := c.socket.WriteTo(rawQuery, nil, c.dstAddr); err != nil {
+		c.log.Warnf("Failed to send mDNS packet %v", err)
+		return
+	}
+}
+
+func (c *Conn) sendInverseQuestion(name string) {
+	packedName, err := dnsmessage.NewName(name)
+	if err != nil {
+		c.log.Warnf("Failed to construct mDNS packet %v", err)
+		return
+	}
+
+	msg := dnsmessage.Message{
+		Header: dnsmessage.Header{},
+		Questions: []dnsmessage.Question{
+			{
+				Type:  dnsmessage.TypePTR,
 				Class: dnsmessage.ClassINET,
 				Name:  packedName,
 			},
@@ -301,14 +365,28 @@ func (c *Conn) start() { //nolint gocognit
 					return
 				}
 
-				if a.Type != dnsmessage.TypeA && a.Type != dnsmessage.TypeAAAA {
-					continue
-				}
+				if a.Type == dnsmessage.TypeA || a.Type == dnsmessage.TypeAAAA {
+					for i := len(c.queries) - 1; i >= 0; i-- {
+						if c.queries[i].nameWithSuffix == a.Name.String() {
+							c.queries[i].queryResultChan <- queryResult{answer: a, addr: src}
+							c.queries = append(c.queries[:i], c.queries[i+1:]...)
+						}
+					}
+				} else if a.Type == dnsmessage.TypePTR {
+					ptr, err := p.PTRResource()
+					if errors.Is(err, dnsmessage.ErrSectionDone) {
+						return
+					}
+					if err != nil {
+						c.log.Warnf("Failed to parse mDNS packet %v", err)
+						return
+					}
 
-				for i := len(c.queries) - 1; i >= 0; i-- {
-					if c.queries[i].nameWithSuffix == a.Name.String() {
-						c.queries[i].queryResultChan <- queryResult{a, src}
-						c.queries = append(c.queries[:i], c.queries[i+1:]...)
+					for i := len(c.queries) - 1; i >= 0; i-- {
+						if c.queries[i].nameWithSuffix == a.Name.String() {
+							c.queries[i].queryResultChan <- queryResult{answer: a, name: ptr.PTR.String()}
+							c.queries = append(c.queries[:i], c.queries[i+1:]...)
+						}
 					}
 				}
 			}
