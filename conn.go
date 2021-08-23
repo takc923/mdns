@@ -269,6 +269,36 @@ func (c *Conn) sendInverseQuestion(name string) {
 	}
 }
 
+func (c *Conn) sendQuestion2(name string, rrType dnsmessage.Type) {
+	packedName, err := dnsmessage.NewName(name)
+	if err != nil {
+		c.log.Warnf("Failed to construct mDNS packet %v", err)
+		return
+	}
+
+	msg := dnsmessage.Message{
+		Header: dnsmessage.Header{},
+		Questions: []dnsmessage.Question{
+			{
+				Type:  rrType,
+				Class: dnsmessage.ClassINET,
+				Name:  packedName,
+			},
+		},
+	}
+
+	rawQuery, err := msg.Pack()
+	if err != nil {
+		c.log.Warnf("Failed to construct mDNS packet %v", err)
+		return
+	}
+
+	if _, err := c.socket.WriteTo(rawQuery, nil, c.dstAddr); err != nil {
+		c.log.Warnf("Failed to send mDNS packet %v", err)
+		return
+	}
+}
+
 func (c *Conn) sendAnswer(name string, dst net.IP) {
 	packedName, err := dnsmessage.NewName(name)
 	if err != nil {
