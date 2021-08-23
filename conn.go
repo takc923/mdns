@@ -136,11 +136,11 @@ func (c *Conn) Query(ctx context.Context, name string) (dnsmessage.ResourceHeade
 
 	defer ticker.Stop()
 
-	c.sendQuestion2(nameWithSuffix, dnsmessage.TypeA)
+	c.sendQuestion(nameWithSuffix, dnsmessage.TypeA)
 	for {
 		select {
 		case <-ticker.C:
-			c.sendQuestion2(nameWithSuffix, dnsmessage.TypeA)
+			c.sendQuestion(nameWithSuffix, dnsmessage.TypeA)
 		case <-c.closed:
 			return dnsmessage.ResourceHeader{}, nil, errConnectionClosed
 		case res := <-queryChan:
@@ -168,11 +168,11 @@ func (c *Conn) IQuery(ctx context.Context, ip [4]byte) (dnsmessage.ResourceHeade
 
 	defer ticker.Stop()
 
-	c.sendQuestion2(nameWithSuffix, dnsmessage.TypePTR)
+	c.sendQuestion(nameWithSuffix, dnsmessage.TypePTR)
 	for {
 		select {
 		case <-ticker.C:
-			c.sendQuestion2(nameWithSuffix, dnsmessage.TypePTR)
+			c.sendQuestion(nameWithSuffix, dnsmessage.TypePTR)
 		case <-c.closed:
 			return dnsmessage.ResourceHeader{}, "", errConnectionClosed
 		case res := <-queryChan:
@@ -209,67 +209,7 @@ func interfaceForRemote(remote string) (net.IP, error) {
 	return localAddr.IP, nil
 }
 
-func (c *Conn) sendQuestion(name string) {
-	packedName, err := dnsmessage.NewName(name)
-	if err != nil {
-		c.log.Warnf("Failed to construct mDNS packet %v", err)
-		return
-	}
-
-	msg := dnsmessage.Message{
-		Header: dnsmessage.Header{},
-		Questions: []dnsmessage.Question{
-			{
-				Type:  dnsmessage.TypeA,
-				Class: dnsmessage.ClassINET,
-				Name:  packedName,
-			},
-		},
-	}
-
-	rawQuery, err := msg.Pack()
-	if err != nil {
-		c.log.Warnf("Failed to construct mDNS packet %v", err)
-		return
-	}
-
-	if _, err := c.socket.WriteTo(rawQuery, nil, c.dstAddr); err != nil {
-		c.log.Warnf("Failed to send mDNS packet %v", err)
-		return
-	}
-}
-
-func (c *Conn) sendInverseQuestion(name string) {
-	packedName, err := dnsmessage.NewName(name)
-	if err != nil {
-		c.log.Warnf("Failed to construct mDNS packet %v", err)
-		return
-	}
-
-	msg := dnsmessage.Message{
-		Header: dnsmessage.Header{},
-		Questions: []dnsmessage.Question{
-			{
-				Type:  dnsmessage.TypePTR,
-				Class: dnsmessage.ClassINET,
-				Name:  packedName,
-			},
-		},
-	}
-
-	rawQuery, err := msg.Pack()
-	if err != nil {
-		c.log.Warnf("Failed to construct mDNS packet %v", err)
-		return
-	}
-
-	if _, err := c.socket.WriteTo(rawQuery, nil, c.dstAddr); err != nil {
-		c.log.Warnf("Failed to send mDNS packet %v", err)
-		return
-	}
-}
-
-func (c *Conn) sendQuestion2(name string, rrType dnsmessage.Type) {
+func (c *Conn) sendQuestion(name string, rrType dnsmessage.Type) {
 	packedName, err := dnsmessage.NewName(name)
 	if err != nil {
 		c.log.Warnf("Failed to construct mDNS packet %v", err)
