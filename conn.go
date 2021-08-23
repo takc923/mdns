@@ -136,11 +136,11 @@ func (c *Conn) Query(ctx context.Context, name string) (dnsmessage.ResourceHeade
 
 	defer ticker.Stop()
 
-	c.sendQuestion(nameWithSuffix)
+	c.sendQuestion2(nameWithSuffix, dnsmessage.TypeA)
 	for {
 		select {
 		case <-ticker.C:
-			c.sendQuestion(nameWithSuffix)
+			c.sendQuestion2(nameWithSuffix, dnsmessage.TypeA)
 		case <-c.closed:
 			return dnsmessage.ResourceHeader{}, nil, errConnectionClosed
 		case res := <-queryChan:
@@ -168,11 +168,11 @@ func (c *Conn) IQuery(ctx context.Context, ip [4]byte) (dnsmessage.ResourceHeade
 
 	defer ticker.Stop()
 
-	c.sendInverseQuestion(nameWithSuffix)
+	c.sendQuestion2(nameWithSuffix, dnsmessage.TypePTR)
 	for {
 		select {
 		case <-ticker.C:
-			c.sendInverseQuestion(nameWithSuffix)
+			c.sendQuestion2(nameWithSuffix, dnsmessage.TypePTR)
 		case <-c.closed:
 			return dnsmessage.ResourceHeader{}, "", errConnectionClosed
 		case res := <-queryChan:
