@@ -120,65 +120,43 @@ func (c *Conn) Close() error {
 // Query sends mDNS Queries for the following name until
 // either the Context is canceled/expires or we get a result
 func (c *Conn) Query(ctx context.Context, name string) (dnsmessage.ResourceHeader, net.Addr, error) {
-	select {
-	case <-c.closed:
-		return dnsmessage.ResourceHeader{}, nil, errConnectionClosed
-	default:
-	}
-
 	nameWithSuffix := name + "."
-
-	queryChan := make(chan queryResult, 1)
-	c.mu.Lock()
-	c.queries = append(c.queries, query{nameWithSuffix, queryChan})
-	ticker := time.NewTicker(c.queryInterval)
-	c.mu.Unlock()
-
-	defer ticker.Stop()
-
-	c.sendQuestion(nameWithSuffix, dnsmessage.TypeA)
-	for {
-		select {
-		case <-ticker.C:
-			c.sendQuestion(nameWithSuffix, dnsmessage.TypeA)
-		case <-c.closed:
-			return dnsmessage.ResourceHeader{}, nil, errConnectionClosed
-		case res := <-queryChan:
-			return res.answer, res.addr, nil
-		case <-ctx.Done():
-			return dnsmessage.ResourceHeader{}, nil, errContextElapsed
-		}
-	}
+	res, err := c.query(ctx, nameWithSuffix, dnsmessage.TypeA)
+	return res.answer, res.addr, err
 }
 
 func (c *Conn) IQuery(ctx context.Context, ip [4]byte) (dnsmessage.ResourceHeader, string, error) {
+	nameWithSuffix := fmt.Sprintf("%v.%v.%v.%v.in-addr.arpa.", ip[3], ip[2], ip[1], ip[0])
+	res, err := c.query(ctx, nameWithSuffix, dnsmessage.TypePTR)
+	return res.answer, res.name, err
+}
+
+func (c *Conn) query(ctx context.Context, name string, rrType dnsmessage.Type) (queryResult, error) {
 	select {
 	case <-c.closed:
-		return dnsmessage.ResourceHeader{}, "", errConnectionClosed
+		return queryResult{}, errConnectionClosed
 	default:
 	}
 
-	nameWithSuffix := fmt.Sprintf("%v.%v.%v.%v.in-addr.arpa.", ip[3], ip[2], ip[1], ip[0])
-
 	queryChan := make(chan queryResult, 1)
 	c.mu.Lock()
-	c.queries = append(c.queries, query{nameWithSuffix, queryChan})
+	c.queries = append(c.queries, query{name, queryChan})
 	ticker := time.NewTicker(c.queryInterval)
 	c.mu.Unlock()
 
 	defer ticker.Stop()
 
-	c.sendQuestion(nameWithSuffix, dnsmessage.TypePTR)
+	c.sendQuestion(name, rrType)
 	for {
 		select {
 		case <-ticker.C:
-			c.sendQuestion(nameWithSuffix, dnsmessage.TypePTR)
+			c.sendQuestion(name, rrType)
 		case <-c.closed:
-			return dnsmessage.ResourceHeader{}, "", errConnectionClosed
+			return queryResult{}, errConnectionClosed
 		case res := <-queryChan:
-			return res.answer, res.name, nil
+			return res, nil
 		case <-ctx.Done():
-			return dnsmessage.ResourceHeader{}, "", errContextElapsed
+			return queryResult{}, errContextElapsed
 		}
 	}
 }
