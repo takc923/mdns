@@ -125,7 +125,7 @@ func (c *Conn) Query(ctx context.Context, name string) (dnsmessage.ResourceHeade
 	return res.answer, res.addr, err
 }
 
-func (c *Conn) IQuery(ctx context.Context, ip [4]byte) (dnsmessage.ResourceHeader, string, error) {
+func (c *Conn) ReverseLookup(ctx context.Context, ip [4]byte) (dnsmessage.ResourceHeader, string, error) {
 	nameWithSuffix := fmt.Sprintf("%v.%v.%v.%v.in-addr.arpa.", ip[3], ip[2], ip[1], ip[0])
 	res, err := c.query(ctx, nameWithSuffix, dnsmessage.TypePTR)
 	return res.answer, res.name, err
