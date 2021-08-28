@@ -314,12 +314,7 @@ func (c *Conn) start() { //nolint gocognit
 				}
 
 				if a.Type == dnsmessage.TypeA || a.Type == dnsmessage.TypeAAAA {
-					for i := len(c.queries) - 1; i >= 0; i-- {
-						if c.queries[i].nameWithSuffix == a.Name.String() {
-							c.queries[i].queryResultChan <- queryResult{answer: a, addr: src}
-							c.queries = append(c.queries[:i], c.queries[i+1:]...)
-						}
-					}
+					c.returnQueryResult(a, queryResult{answer: a, addr: src})
 				} else if a.Type == dnsmessage.TypePTR {
 					ptr, err := p.PTRResource()
 					if errors.Is(err, dnsmessage.ErrSectionDone) {
@@ -329,15 +324,18 @@ func (c *Conn) start() { //nolint gocognit
 						c.log.Warnf("Failed to parse mDNS packet %v", err)
 						return
 					}
-
-					for i := len(c.queries) - 1; i >= 0; i-- {
-						if c.queries[i].nameWithSuffix == a.Name.String() {
-							c.queries[i].queryResultChan <- queryResult{answer: a, name: ptr.PTR.String()}
-							c.queries = append(c.queries[:i], c.queries[i+1:]...)
-						}
-					}
+					c.returnQueryResult(a, queryResult{answer: a, name: ptr.PTR.String()})
 				}
 			}
 		}()
+	}
+}
+
+func (c *Conn) returnQueryResult(a dnsmessage.ResourceHeader, qr queryResult) {
+	for i := len(c.queries) - 1; i >= 0; i-- {
+		if c.queries[i].nameWithSuffix == a.Name.String() {
+			c.queries[i].queryResultChan <- qr
+			c.queries = append(c.queries[:i], c.queries[i+1:]...)
+		}
 	}
 }
