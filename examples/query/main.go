@@ -24,7 +24,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	answer, src, err := server.ReverseLookup(context.TODO(), [4]byte{192, 168, 1, 30})
+	answer, src, err := server.ReverseLookup(context.TODO(), []byte{192, 168, 1, 30})
 	fmt.Println(answer)
 	fmt.Println(src)
 	fmt.Println(err)
