@@ -3,7 +3,7 @@ package main
 import (
 	"net"
 
-	"github.com/pion/mdns"
+	"github.com/takc923/mdns"
 	"golang.org/x/net/ipv4"
 )
 

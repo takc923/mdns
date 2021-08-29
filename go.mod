@@ -1,4 +1,4 @@
-module github.com/pion/mdns
+module github.com/takc923/mdns
 
 go 1.12
 
