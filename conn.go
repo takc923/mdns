@@ -3,6 +3,7 @@ package mdns
 import (
 	"context"
 	"errors"
+	"fmt"
 	"math/big"
 	"net"
 	"sync"
@@ -36,6 +37,7 @@ type query struct {
 type queryResult struct {
 	answer dnsmessage.ResourceHeader
 	addr   net.Addr
+	name   string
 }
 
 const (
@@ -118,33 +120,44 @@ func (c *Conn) Close() error {
 // Query sends mDNS Queries for the following name until
 // either the Context is canceled/expires or we get a result
 func (c *Conn) Query(ctx context.Context, name string) (dnsmessage.ResourceHeader, net.Addr, error) {
+	nameWithSuffix := name + "."
+	res, err := c.query(ctx, nameWithSuffix, dnsmessage.TypeA)
+	return res.answer, res.addr, err
+}
+
+func (c *Conn) ReverseLookup(ctx context.Context, ip net.IP) (dnsmessage.ResourceHeader, string, error) {
+	bytes := ipToBytes(ip)
+	nameWithSuffix := fmt.Sprintf("%v.%v.%v.%v.in-addr.arpa.", bytes[3], bytes[2], bytes[1], bytes[0])
+	res, err := c.query(ctx, nameWithSuffix, dnsmessage.TypePTR)
+	return res.answer, res.name, err
+}
+
+func (c *Conn) query(ctx context.Context, name string, rrType dnsmessage.Type) (queryResult, error) {
 	select {
 	case <-c.closed:
-		return dnsmessage.ResourceHeader{}, nil, errConnectionClosed
+		return queryResult{}, errConnectionClosed
 	default:
 	}
 
-	nameWithSuffix := name + "."
-
 	queryChan := make(chan queryResult, 1)
 	c.mu.Lock()
-	c.queries = append(c.queries, query{nameWithSuffix, queryChan})
+	c.queries = append(c.queries, query{name, queryChan})
 	ticker := time.NewTicker(c.queryInterval)
 	c.mu.Unlock()
 
 	defer ticker.Stop()
 
-	c.sendQuestion(nameWithSuffix)
+	c.sendQuestion(name, rrType)
 	for {
 		select {
 		case <-ticker.C:
-			c.sendQuestion(nameWithSuffix)
+			c.sendQuestion(name, rrType)
 		case <-c.closed:
-			return dnsmessage.ResourceHeader{}, nil, errConnectionClosed
+			return queryResult{}, errConnectionClosed
 		case res := <-queryChan:
-			return res.answer, res.addr, nil
+			return res, nil
 		case <-ctx.Done():
-			return dnsmessage.ResourceHeader{}, nil, errContextElapsed
+			return queryResult{}, errContextElapsed
 		}
 	}
 }
@@ -175,7 +188,7 @@ func interfaceForRemote(remote string) (net.IP, error) {
 	return localAddr.IP, nil
 }
 
-func (c *Conn) sendQuestion(name string) {
+func (c *Conn) sendQuestion(name string, rrType dnsmessage.Type) {
 	packedName, err := dnsmessage.NewName(name)
 	if err != nil {
 		c.log.Warnf("Failed to construct mDNS packet %v", err)
@@ -186,7 +199,7 @@ func (c *Conn) sendQuestion(name string) {
 		Header: dnsmessage.Header{},
 		Questions: []dnsmessage.Question{
 			{
-				Type:  dnsmessage.TypeA,
+				Type:  rrType,
 				Class: dnsmessage.ClassINET,
 				Name:  packedName,
 			},
@@ -301,17 +314,29 @@ func (c *Conn) start() { //nolint gocognit
 					return
 				}
 
-				if a.Type != dnsmessage.TypeA && a.Type != dnsmessage.TypeAAAA {
-					continue
-				}
-
-				for i := len(c.queries) - 1; i >= 0; i-- {
-					if c.queries[i].nameWithSuffix == a.Name.String() {
-						c.queries[i].queryResultChan <- queryResult{a, src}
-						c.queries = append(c.queries[:i], c.queries[i+1:]...)
+				if a.Type == dnsmessage.TypeA || a.Type == dnsmessage.TypeAAAA {
+					c.returnQueryResult(a, queryResult{answer: a, addr: src})
+				} else if a.Type == dnsmessage.TypePTR {
+					ptr, err := p.PTRResource()
+					if errors.Is(err, dnsmessage.ErrSectionDone) {
+						return
 					}
+					if err != nil {
+						c.log.Warnf("Failed to parse mDNS packet %v", err)
+						return
+					}
+					c.returnQueryResult(a, queryResult{answer: a, name: ptr.PTR.String()})
 				}
 			}
 		}()
+	}
+}
+
+func (c *Conn) returnQueryResult(a dnsmessage.ResourceHeader, qr queryResult) {
+	for i := len(c.queries) - 1; i >= 0; i-- {
+		if c.queries[i].nameWithSuffix == a.Name.String() {
+			c.queries[i].queryResultChan <- qr
+			c.queries = append(c.queries[:i], c.queries[i+1:]...)
+		}
 	}
 }
